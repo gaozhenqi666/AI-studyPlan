@@ -1,13 +1,8 @@
-import OpenAI from 'openai';
-
-const openai = new OpenAI({
-  apiKey: import.meta.env.VITE_DEEPSEEK_API_KEY,
-  baseURL: 'https://api.deepseek.com',
-  dangerouslyAllowBrowser: true 
-});
+import { getAIClient } from './aiClient';
 
 export const generateSimilarQuestion = async (originalQuestion, analysis) => {
   try {
+    const { client: openai, model } = getAIClient();
     const prompt = `你是一个非常专业的各学科出题老师。
 用户刚刚做过这样一道题，并且看了它的解析：
 【原题】：${originalQuestion}
@@ -30,7 +25,7 @@ export const generateSimilarQuestion = async (originalQuestion, analysis) => {
 }`;
 
     const response = await openai.chat.completions.create({
-      model: "deepseek-chat",
+      model,
       messages: [{ role: "user", content: prompt }],
       temperature: 0.8,
       response_format: { type: "json_object" }
@@ -48,6 +43,7 @@ export const generateSimilarQuestion = async (originalQuestion, analysis) => {
 
 export const generateQuiz = async (topic) => {
   try {
+    const { client: openai, model } = getAIClient();
     const prompt = `你是一个非常专业且平易近人的各学科出题老师。请根据用户提供的学习主题：“${topic}”，生成 3 道相关的练习题。
 这可能是高数、物理、英语或任何学科。
 要求：
@@ -67,7 +63,7 @@ export const generateQuiz = async (topic) => {
 }`;
 
     const response = await openai.chat.completions.create({
-      model: "deepseek-chat",
+      model,
       messages: [{ role: "user", content: prompt }],
       temperature: 0.7,
       response_format: { type: "json_object" }
@@ -86,6 +82,7 @@ export const generateQuiz = async (topic) => {
 
 export const gradeQuiz = async (quizData, userAnswers) => {
   try {
+    const { client: openai, model } = getAIClient();
     const prompt = `你是一个非常专业、耐心且逻辑清晰的批改老师。
 这里是一份测试卷的题目和用户的答案：
 题目数据：${JSON.stringify(quizData)}
@@ -109,7 +106,7 @@ export const gradeQuiz = async (quizData, userAnswers) => {
 }`;
 
     const response = await openai.chat.completions.create({
-      model: "deepseek-chat",
+      model,
       messages: [{ role: "user", content: prompt }],
       temperature: 0.7,
       response_format: { type: "json_object" }

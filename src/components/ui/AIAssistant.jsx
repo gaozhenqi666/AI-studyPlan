@@ -1,12 +1,12 @@
 import { AnimatePresence, motion } from 'framer-motion';
 import 'katex/dist/katex.min.css';
 import { Bot, Loader2, Maximize2, Minimize2, Send, X } from 'lucide-react';
-import OpenAI from 'openai';
 import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
+import { getAIClient } from '../../lib/aiClient';
 
 const AIAssistant = ({ isOpen, onClose, todos, stats, onBatchAddTodos }) => {
   const [messages, setMessages] = useState([
@@ -30,16 +30,7 @@ const AIAssistant = ({ isOpen, onClose, todos, stats, onBatchAddTodos }) => {
     setIsLoading(true);
 
     try {
-      const apiKey = import.meta.env.VITE_DEEPSEEK_API_KEY;
-      if (!apiKey) {
-        throw new Error('Missing VITE_DEEPSEEK_API_KEY');
-      }
-
-      const openai = new OpenAI({
-        apiKey,
-        baseURL: 'https://api.deepseek.com/v1',
-        dangerouslyAllowBrowser: true
-      });
+      const { client: openai, model } = getAIClient();
 
       const systemPrompt = `你是一个智能学习助手。你的职责是：
 1. 帮助用户解答学习中的任何问题（就像豆包一样）。
@@ -110,7 +101,7 @@ ${todos.filter(t => !t.completed).map(t => `- [${t.type === 'task' ? '任务' : 
       ];
 
       const response = await openai.chat.completions.create({
-        model: "deepseek-chat",
+        model,
         messages: apiMessages,
         tools: tools,
         tool_choice: "auto"
@@ -136,7 +127,11 @@ ${todos.filter(t => !t.completed).map(t => `- [${t.type === 'task' ? '任务' : 
 
     } catch (error) {
       console.error('AI Error:', error);
-      setMessages(prev => [...prev, { role: 'assistant', content: '抱歉，我现在有些连接问题，请稍后再试。' }]);
+      if (error?.code === 'AI_NOT_CONFIGURED' || error?.message === 'AI_NOT_CONFIGURED') {
+        setMessages(prev => [...prev, { role: 'assistant', content: '尚未配置 AI Key。请先点击右上角「AI 配置」完成配置后再使用。' }]);
+      } else {
+        setMessages(prev => [...prev, { role: 'assistant', content: '抱歉，我现在有些连接问题，请稍后再试。' }]);
+      }
     } finally {
       setIsLoading(false);
     }

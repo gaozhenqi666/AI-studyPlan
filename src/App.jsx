@@ -1,12 +1,13 @@
 import { AnimatePresence, motion, Reorder } from 'framer-motion';
 import 'katex/dist/katex.min.css';
-import { BookOpen, Bot, Calendar, CheckCircle2, Clock, Coffee, Edit2, Flame, LayoutDashboard, ListTodo, LogOut, Pause, Play, Plus, Sparkles, Target, Timer, Trash2, Trophy, X, Zap } from 'lucide-react';
+import { BookOpen, Bot, Calendar, CheckCircle2, Clock, Coffee, Edit2, Flame, LayoutDashboard, ListTodo, LogOut, Map as MapIcon, Pause, Play, Plus, Sparkles, Target, Timer, Trash2, Trophy, X, Zap } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
 import remarkMath from 'remark-math';
 import './App.css';
 import AIAssistant from './components/ui/AIAssistant';
+import AIConfigModal from './components/ui/AIConfigModal';
 import Auth from './components/ui/Auth';
 import CircularProgress from './components/ui/CircularProgress';
 import ColorBends from './components/ui/ColorBends';
@@ -14,6 +15,7 @@ import Counter from './components/ui/Counter';
 import CountUp from './components/ui/CountUp';
 import Heatmap from './components/ui/Heatmap';
 import QuizModal from './components/ui/QuizModal';
+import RoadmapView from './components/ui/RoadmapView';
 import ScrollVelocity from './components/ui/ScrollVelocity';
 import { supabase } from './lib/supabase';
 
@@ -220,6 +222,7 @@ function App() {
   const [isAdding, setIsAdding] = useState(false);
   const [editingTodoId, setEditingTodoId] = useState(null);
   const [isAIOpen, setIsAIOpen] = useState(false);
+  const [isAIConfigOpen, setIsAIConfigOpen] = useState(false);
 
   // Form State
   const [itemType, setItemType] = useState('task');
@@ -675,6 +678,13 @@ function App() {
 
       <div className="fixed top-6 right-6 z-[150] flex items-center gap-3">
         <button
+          onClick={() => setIsAIConfigOpen(true)}
+          className="flex items-center justify-center p-3 bg-black/40 border border-white/10 rounded-full text-white/40 hover:text-white hover:bg-white/10 transition-all backdrop-blur-xl"
+          title="AI 配置"
+        >
+          <Zap size={18} />
+        </button>
+        <button
           onClick={() => setIsAIOpen(!isAIOpen)}
           className={`flex items-center justify-center p-3 border rounded-full transition-all backdrop-blur-xl shadow-lg ${isAIOpen ? 'bg-[#00ffd1] border-[#00ffd1] text-black shadow-[0_0_20px_rgba(0,255,209,0.4)]' : 'bg-black/40 border-white/10 text-[#00ffd1] hover:text-black hover:bg-[#00ffd1] hover:border-[#00ffd1]'}`}
           title="AI学习助手"
@@ -697,9 +707,14 @@ function App() {
         stats={stats} 
         onBatchAddTodos={handleBatchAddTodos}
       />
+      <AIConfigModal
+        isOpen={isAIConfigOpen}
+        onClose={() => setIsAIConfigOpen(false)}
+        onConfigured={() => {}}
+      />
 
       {/* Main Content Area - Scrollable */}
-      <div className={`relative z-10 w-full h-full overflow-x-hidden flex flex-col items-center pt-10 ${currentView === 'dashboard' ? 'overflow-y-auto pb-32' : 'overflow-hidden pb-10'} [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]`}>
+      <div className={`relative z-10 w-full h-full overflow-x-hidden flex flex-col items-center pt-10 ${currentView === 'dashboard' || currentView === 'roadmap' ? 'overflow-y-auto pb-32' : 'overflow-hidden pb-10'} [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]`}>
         
         {/* Navigation Toggle */}
         {!focusingTask && !isAdding && (
@@ -722,6 +737,22 @@ function App() {
               <span className="relative z-10 flex items-center gap-2">
                 <ListTodo size={18} />
                 任务专注
+              </span>
+            </button>
+            <button
+              onClick={() => setCurrentView('roadmap')}
+              className={`relative flex items-center justify-center gap-2 px-8 py-3 text-sm font-bold tracking-widest rounded-full transition-colors ${currentView === 'roadmap' ? 'text-black' : 'text-white/40 hover:text-white/70'}`}
+            >
+              {currentView === 'roadmap' && (
+                <motion.div
+                  layoutId="nav-bg"
+                  className="absolute inset-0 bg-[#ffb800] rounded-full shadow-[0_0_15px_rgba(255,184,0,0.5)]"
+                  transition={{ type: "spring", bounce: 0.2, duration: 0.6 }}
+                />
+              )}
+              <span className="relative z-10 flex items-center gap-2">
+                <MapIcon size={18} />
+                长线规划
               </span>
             </button>
             <button
@@ -1045,6 +1076,11 @@ function App() {
               )}
 
             </motion.div>
+          ) : currentView === 'roadmap' ? (
+            <RoadmapView
+              session={session}
+              onBatchAddTodos={handleBatchAddTodos}
+            />
           ) : focusingTask ? (
             <motion.div
               key="focus-view"
