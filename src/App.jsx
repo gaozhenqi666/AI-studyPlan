@@ -1,13 +1,19 @@
 import { AnimatePresence, motion, Reorder } from 'framer-motion';
-import { BookOpen, Calendar, CheckCircle2, Clock, Coffee, Flame, LayoutDashboard, ListTodo, LogOut, Pause, Play, Plus, Sparkles, Target, Timer, Trophy, X, Zap } from 'lucide-react';
+import 'katex/dist/katex.min.css';
+import { BookOpen, Bot, Calendar, CheckCircle2, Clock, Coffee, Edit2, Flame, LayoutDashboard, ListTodo, LogOut, Pause, Play, Plus, Sparkles, Target, Timer, Trash2, Trophy, X, Zap } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import rehypeKatex from 'rehype-katex';
+import remarkMath from 'remark-math';
 import './App.css';
+import AIAssistant from './components/ui/AIAssistant';
 import Auth from './components/ui/Auth';
 import CircularProgress from './components/ui/CircularProgress';
 import ColorBends from './components/ui/ColorBends';
 import Counter from './components/ui/Counter';
 import CountUp from './components/ui/CountUp';
 import Heatmap from './components/ui/Heatmap';
+import QuizModal from './components/ui/QuizModal';
 import ScrollVelocity from './components/ui/ScrollVelocity';
 import { supabase } from './lib/supabase';
 
@@ -47,6 +53,24 @@ function App() {
   
   const [currentView, setCurrentView] = useState('todo'); // 'todo', 'focus', 'dashboard'
   const [selectedHistoryDate, setSelectedHistoryDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [statTab, setStatTab] = useState('overview'); // 'overview', 'wrongbook'
+  const [wrongBookData, setWrongBookData] = useState([]);
+  
+  // Wrong Book Bookcase state
+  const [selectedSubject, setSelectedSubject] = useState(null);
+  const [customSubjects, setCustomSubjects] = useState([]);
+  const [isAddingSubject, setIsAddingSubject] = useState(false);
+  const [newSubjectName, setNewSubjectName] = useState('');
+  
+  const allSubjects = useMemo(() => {
+    const subjectsFromData = wrongBookData.map(item => item.subject);
+    return [...new Set([...subjectsFromData, ...customSubjects])];
+  }, [wrongBookData, customSubjects]);
+  
+  // Quiz State
+  const [isQuizOpen, setIsQuizOpen] = useState(false);
+  const [quizTopic, setQuizTopic] = useState('');
+  const [quizTaskId, setQuizTaskId] = useState(null);
 
   // Auth listener
   useEffect(() => {
@@ -164,6 +188,7 @@ function App() {
         .from('focus_records')
         .select(`
           id,
+          todo_id,
           duration_minutes,
           completed_date,
           todos ( title, task_type )
@@ -178,10 +203,23 @@ function App() {
     if (session) {
       fetchTodos();
       fetchHistoryRecords();
+      fetchWrongBook();
     }
   }, [session]);
 
+  const fetchWrongBook = async () => {
+    const { data, error } = await supabase
+      .from('wrong_book')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (!error && data) {
+      setWrongBookData(data);
+    }
+  };
+
   const [isAdding, setIsAdding] = useState(false);
+  const [editingTodoId, setEditingTodoId] = useState(null);
+  const [isAIOpen, setIsAIOpen] = useState(false);
 
   // Form State
   const [itemType, setItemType] = useState('task');
@@ -280,12 +318,12 @@ function App() {
     }
   };
 
-  const handleAddTodo = async () => {
+  const handleSaveTodo = async () => {
     let finalDuration = duration === 'custom' ? parseInt(customDuration) : duration;
     if (isNaN(finalDuration) || finalDuration <= 0) finalDuration = 15;
     if (itemType === 'rest' && finalDuration > 20) finalDuration = 20;
 
-    const newItem = {
+    const todoData = {
       user_id: session.user.id,
       title: taskName.trim() || (itemType === 'task' ? '未命名任务' : '休息片刻'),
       item_type: itemType,
@@ -295,25 +333,97 @@ function App() {
       completed: false
     };
 
-    const { data, error } = await supabase.from('todos').insert([newItem]).select().single();
-
-    if (!error && data) {
-      const formattedTodo = {
-        ...data,
-        text: data.title,
-        type: data.item_type,
-        taskType: data.task_type,
-        priority: data.priority,
-        duration: data.duration,
-        completed: data.completed
-      };
-      setTodos([formattedTodo, ...todos]);
-      setIsAdding(false);
-      setTimeout(resetForm, 400);
+    if (editingTodoId) {
+      const { data, error } = await supabase.from('todos').update(todoData).eq('id', editingTodoId).select().single();
+      if (!error && data) {
+        const formattedTodo = {
+          ...data,
+          text: data.title,
+          type: data.item_type,
+          taskType: data.task_type,
+          priority: data.priority,
+          duration: data.duration,
+          completed: data.completed
+        };
+        setTodos(todos.map(t => t.id === editingTodoId ? formattedTodo : t));
+        setIsAdding(false);
+        setTimeout(resetForm, 400);
+      }
+    } else {
+      const { data, error } = await supabase.from('todos').insert([todoData]).select().single();
+      if (!error && data) {
+        const formattedTodo = {
+          ...data,
+          text: data.title,
+          type: data.item_type,
+          taskType: data.task_type,
+          priority: data.priority,
+          duration: data.duration,
+          completed: data.completed
+        };
+        setTodos([formattedTodo, ...todos]);
+        setIsAdding(false);
+        setTimeout(resetForm, 400);
+      }
     }
   };
 
+  const handleBatchAddTodos = async (tasks) => {
+    const newItems = tasks.map(task => ({
+      user_id: session.user.id,
+      title: task.title,
+      item_type: task.item_type,
+      task_type: task.item_type === 'task' ? (task.task_type || 'study') : null,
+      priority: task.item_type === 'task' ? (task.priority || 'medium') : null,
+      duration: task.duration,
+      completed: false
+    }));
+    
+    const { data, error } = await supabase.from('todos').insert(newItems).select();
+    if (!error && data) {
+      const formattedTodos = data.map(d => ({
+        ...d,
+        id: d.id,
+        text: d.title,
+        type: d.item_type,
+        taskType: d.task_type,
+        priority: d.priority,
+        duration: d.duration,
+        completed: d.completed
+      }));
+      setTodos(prev => [...formattedTodos, ...prev]);
+    }
+  };
+
+  const handleDeleteTodo = async (id, e) => {
+    e.stopPropagation();
+    const { error } = await supabase.from('todos').delete().eq('id', id);
+    if (!error) {
+      setTodos(todos.filter(t => t.id !== id));
+    }
+  };
+
+  const handleEditTodo = (todo, e) => {
+    e.stopPropagation();
+    setEditingTodoId(todo.id);
+    setItemType(todo.type);
+    setTaskName(todo.text);
+    setTaskType(todo.taskType || 'study');
+    setPriority(todo.priority || 'medium');
+    
+    if ([15, 20, 25, 30, 45, 60].includes(todo.duration)) {
+      setDuration(todo.duration);
+      setCustomDuration('');
+    } else {
+      setDuration('custom');
+      setCustomDuration(todo.duration.toString());
+    }
+    
+    setIsAdding(true);
+  };
+
   const resetForm = () => {
+    setEditingTodoId(null);
     setItemType('task');
     setTaskName('');
     setTaskType('study');
@@ -346,7 +456,16 @@ function App() {
 
   // Split active and completed tasks
   const activeTodos = todos.filter(t => !t.completed);
-  const completedTodos = todos.filter(t => t.completed);
+  
+  const todayStr = new Date().toISOString().split('T')[0];
+  const completedTodos = todos.filter(t => {
+    if (!t.completed) return false;
+    if (t.endTime) {
+      return t.endTime.toISOString().split('T')[0] === todayStr;
+    }
+    const record = historyRecords.find(r => r.todo_id === t.id);
+    return record && record.completed_date === todayStr;
+  });
 
   const handleReorder = (newOrder) => {
     setTodos([...newOrder, ...completedTodos]);
@@ -419,6 +538,14 @@ function App() {
             <Clock size={12} />
             {todo.duration} MIN
           </span>
+          <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button onClick={(e) => handleEditTodo(todo, e)} className="p-1.5 bg-white/5 hover:bg-white/20 text-white/60 hover:text-white rounded-md transition-colors">
+              <Edit2 size={14} />
+            </button>
+            <button onClick={(e) => handleDeleteTodo(todo.id, e)} className="p-1.5 bg-white/5 hover:bg-red-500/20 text-white/60 hover:text-red-400 rounded-md transition-colors">
+              <Trash2 size={14} />
+            </button>
+          </div>
         </div>
       </Reorder.Item>
     );
@@ -449,24 +576,39 @@ function App() {
           <span className="truncate">{todo.text}</span>
         </div>
         
-        <div className="flex flex-wrap items-center gap-3 text-xs font-bold tracking-wider text-white/60 pl-8">
-          <span className="flex items-center gap-1.5 text-[#00ffd1] drop-shadow-[0_0_8px_rgba(0,255,209,0.3)]">
-            <CheckCircle2 size={14} className="text-[#00ffd1]" />
-            已完成
-          </span>
-          {todo.startTime && todo.endTime && (
-            <>
-              <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/10 border border-white/5 shadow-inner">
-                <Clock size={12} className="text-white/40" />
-                {todo.startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} 
-                <span className="text-white/30 mx-0.5">-</span>
-                {todo.endTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </span>
-              <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#8a5cff]/20 border border-[#8a5cff]/30 text-[#b998ff] shadow-[inset_0_1px_2px_rgba(255,255,255,0.1)]">
-                <Timer size={12} className="text-[#b998ff]" />
-                用时 {actualDurationText}
-              </span>
-            </>
+        <div className="flex flex-wrap items-center justify-between gap-3 pl-8">
+          <div className="flex flex-wrap items-center gap-3 text-xs font-bold tracking-wider text-white/60">
+            <span className="flex items-center gap-1.5 text-[#00ffd1] drop-shadow-[0_0_8px_rgba(0,255,209,0.3)]">
+              <CheckCircle2 size={14} className="text-[#00ffd1]" />
+              已完成
+            </span>
+            {todo.startTime && todo.endTime && (
+              <>
+                <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/10 border border-white/5 shadow-inner">
+                  <Clock size={12} className="text-white/40" />
+                  {todo.startTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} 
+                  <span className="text-white/30 mx-0.5">-</span>
+                  {todo.endTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+                <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#8a5cff]/20 border border-[#8a5cff]/30 text-[#b998ff] shadow-[inset_0_1px_2px_rgba(255,255,255,0.1)]">
+                  <Timer size={12} className="text-[#b998ff]" />
+                  用时 {actualDurationText}
+                </span>
+              </>
+            )}
+          </div>
+          {todo.type === 'task' && (
+            <button
+              onClick={() => {
+                setQuizTopic(todo.text);
+                setQuizTaskId(todo.id);
+                setIsQuizOpen(true);
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-[#00ffd1]/20 to-[#00ffd1]/10 border border-[#00ffd1]/30 text-[#00ffd1] hover:from-[#00ffd1]/30 hover:to-[#00ffd1]/20 hover:border-[#00ffd1]/50 transition-all text-xs font-bold shadow-[0_0_15px_rgba(0,255,209,0.15)] group"
+            >
+              <Sparkles size={14} className="group-hover:animate-pulse" />
+              AI 巩固练习
+            </button>
           )}
         </div>
       </motion.div>
@@ -531,13 +673,30 @@ function App() {
         </div>
       </div>
 
-      <button
-        onClick={() => supabase.auth.signOut()}
-        className="fixed top-6 right-6 z-50 flex items-center justify-center p-3 bg-black/40 border border-white/10 rounded-full text-white/40 hover:text-white hover:bg-white/10 transition-all backdrop-blur-xl"
-        title="退出登录"
-      >
-        <LogOut size={18} />
-      </button>
+      <div className="fixed top-6 right-6 z-[150] flex items-center gap-3">
+        <button
+          onClick={() => setIsAIOpen(!isAIOpen)}
+          className={`flex items-center justify-center p-3 border rounded-full transition-all backdrop-blur-xl shadow-lg ${isAIOpen ? 'bg-[#00ffd1] border-[#00ffd1] text-black shadow-[0_0_20px_rgba(0,255,209,0.4)]' : 'bg-black/40 border-white/10 text-[#00ffd1] hover:text-black hover:bg-[#00ffd1] hover:border-[#00ffd1]'}`}
+          title="AI学习助手"
+        >
+          <Bot size={18} className={isAIOpen ? 'fill-black/20' : ''} />
+        </button>
+        <button
+          onClick={() => supabase.auth.signOut()}
+          className="flex items-center justify-center p-3 bg-black/40 border border-white/10 rounded-full text-white/40 hover:text-white hover:bg-white/10 transition-all backdrop-blur-xl"
+          title="退出登录"
+        >
+          <LogOut size={18} />
+        </button>
+      </div>
+
+      <AIAssistant 
+        isOpen={isAIOpen} 
+        onClose={() => setIsAIOpen(false)} 
+        todos={todos} 
+        stats={stats} 
+        onBatchAddTodos={handleBatchAddTodos}
+      />
 
       {/* Main Content Area - Scrollable */}
       <div className={`relative z-10 w-full h-full overflow-x-hidden flex flex-col items-center pt-10 ${currentView === 'dashboard' ? 'overflow-y-auto pb-32' : 'overflow-hidden pb-10'} [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]`}>
@@ -593,7 +752,39 @@ function App() {
               exit={{ opacity: 0, scale: 0.95, y: -20, transition: { duration: 0.3 } }}
               className="w-full max-w-5xl flex flex-col gap-8 px-4 pb-20"
             >
-              {/* Top Stats Row */}
+              {/* Stat Tabs */}
+              <div className="flex bg-black/40 p-1.5 rounded-2xl border border-white/5 shadow-inner self-start w-fit">
+                <button
+                  onClick={() => setStatTab('overview')}
+                  className={`relative flex items-center justify-center gap-2 py-2.5 px-6 text-sm font-bold tracking-widest rounded-xl transition-colors ${statTab === 'overview' ? 'text-white' : 'text-white/40 hover:text-white/70'}`}
+                >
+                  {statTab === 'overview' && (
+                    <motion.div
+                      layoutId="stat-tab-bg"
+                      className="absolute inset-0 bg-white/15 border border-white/10 rounded-xl"
+                      transition={{ type: "spring", bounce: 0.2, duration: 0.5 }}
+                    />
+                  )}
+                  <span className="relative z-10">统计总览</span>
+                </button>
+                <button
+                  onClick={() => setStatTab('wrongbook')}
+                  className={`relative flex items-center justify-center gap-2 py-2.5 px-6 text-sm font-bold tracking-widest rounded-xl transition-colors ${statTab === 'wrongbook' ? 'text-white' : 'text-white/40 hover:text-white/70'}`}
+                >
+                  {statTab === 'wrongbook' && (
+                    <motion.div
+                      layoutId="stat-tab-bg"
+                      className="absolute inset-0 bg-white/15 border border-white/10 rounded-xl"
+                      transition={{ type: "spring", bounce: 0.2, duration: 0.5 }}
+                    />
+                  )}
+                  <span className="relative z-10">我的错题本</span>
+                </button>
+              </div>
+
+              {statTab === 'overview' ? (
+                <>
+                  {/* Top Stats Row */}
               <div className="flex gap-6 w-full">
                 {/* Average Daily Time */}
                 <div className="flex-1 bg-black/40 backdrop-blur-2xl border border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.4)] rounded-[30px] p-8 flex items-center justify-center gap-10 relative overflow-hidden">
@@ -701,6 +892,157 @@ function App() {
                   )}
                 </div>
               </div>
+                </>
+              ) : (
+                <div className="w-full bg-black/40 backdrop-blur-2xl border border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.4)] rounded-[30px] p-8 min-h-[500px]">
+                  {!selectedSubject ? (
+                    <>
+                      <div className="flex items-center justify-between mb-8">
+                        <h3 className="text-xl font-bold tracking-widest text-white/90 uppercase flex items-center gap-2">
+                          <BookOpen size={20} className="text-[#ff5c7a]" />
+                          我的错题本
+                        </h3>
+                        {isAddingSubject ? (
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              value={newSubjectName}
+                              onChange={(e) => setNewSubjectName(e.target.value)}
+                              placeholder="输入科目名称"
+                              className="px-3 py-1.5 rounded-lg bg-black/40 border border-white/20 text-white text-sm outline-none focus:border-[#ff5c7a]"
+                              autoFocus
+                            />
+                            <button
+                              onClick={() => {
+                                if (newSubjectName.trim() && !allSubjects.includes(newSubjectName.trim())) {
+                                  setCustomSubjects([...customSubjects, newSubjectName.trim()]);
+                                }
+                                setIsAddingSubject(false);
+                                setNewSubjectName('');
+                              }}
+                              className="px-3 py-1.5 rounded-lg bg-[#ff5c7a]/20 text-[#ff5c7a] text-sm font-bold border border-[#ff5c7a]/30 hover:bg-[#ff5c7a]/30"
+                            >
+                              确定
+                            </button>
+                            <button onClick={() => setIsAddingSubject(false)} className="p-1.5 text-white/40 hover:text-white">
+                              <X size={16} />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setIsAddingSubject(true)}
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-white/70 hover:text-white hover:bg-white/10 text-sm font-bold transition-all"
+                          >
+                            <Plus size={16} />
+                            新增科目
+                          </button>
+                        )}
+                      </div>
+
+                      {allSubjects.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-20 text-white/30 gap-4">
+                          <Sparkles size={48} className="opacity-20" />
+                          <span className="text-sm font-bold tracking-widest">目前还没有错题本，点击右上角新增或去答题吧！</span>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4">
+                          {allSubjects.map((subject, idx) => {
+                            const count = wrongBookData.filter(item => item.subject === subject).length;
+                            return (
+                              <div
+                                key={idx}
+                                onClick={() => setSelectedSubject(subject)}
+                                className="group cursor-pointer relative aspect-[3/4] rounded-r-xl rounded-l-sm bg-gradient-to-br from-white/10 to-white/5 border border-white/10 border-l-[4px] border-l-[#ff5c7a]/70 hover:border-l-[#ff5c7a] p-3 sm:p-4 flex flex-col transition-all hover:scale-[1.02] hover:shadow-[0_8px_20px_-10px_rgba(255,92,122,0.4)]"
+                              >
+                                <div className="absolute top-0 right-0 w-12 h-12 bg-white/5 rounded-bl-full pointer-events-none transition-all group-hover:bg-[#ff5c7a]/10" />
+                                <BookOpen size={20} className="text-[#ff5c7a]/70 mb-3 group-hover:text-[#ff5c7a] transition-colors" />
+                                <h4 className="text-sm sm:text-base font-bold text-white/90 leading-tight mb-2 line-clamp-2">{subject}</h4>
+                                <div className="mt-auto flex items-center justify-between">
+                                  <span className="text-[10px] font-bold tracking-wider text-white/40 group-hover:text-white/70 transition-colors">
+                                    {count} 道错题
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-4 mb-8 pb-4 border-b border-white/10">
+                        <button
+                          onClick={() => setSelectedSubject(null)}
+                          className="p-2 -ml-2 rounded-full hover:bg-white/10 text-white/50 hover:text-white transition-colors"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+                        </button>
+                        <h3 className="text-xl font-bold tracking-widest text-white/90 uppercase flex items-center gap-2">
+                          <BookOpen size={20} className="text-[#ff5c7a]" />
+                          {selectedSubject}
+                        </h3>
+                      </div>
+                      
+                      {wrongBookData.filter(item => item.subject === selectedSubject).length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-20 text-white/30 gap-4">
+                          <Sparkles size={48} className="opacity-20" />
+                          <span className="text-sm font-bold tracking-widest">这个错题本还是空的，继续保持！</span>
+                        </div>
+                      ) : (
+                        <div className="grid gap-6">
+                          {wrongBookData.filter(item => item.subject === selectedSubject).map((item) => (
+                            <div key={item.id} className="p-6 bg-white/5 border border-white/10 rounded-2xl flex flex-col gap-4">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs text-white/40 font-mono">
+                                  {new Date(item.created_at).toLocaleDateString()}
+                                </span>
+                              </div>
+                              
+                              <div className="text-white/90 font-medium leading-relaxed prose-sm prose-invert">
+                                <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                                  {item.question_content}
+                                </ReactMarkdown>
+                              </div>
+                              
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                                <div className="p-4 bg-red-500/10 border border-red-500/20 rounded-xl">
+                                  <h4 className="text-xs font-bold text-red-400 mb-2 uppercase tracking-wider">你的答案</h4>
+                                  <div className="text-white/80 text-sm prose-sm prose-invert">
+                                    <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                                      {item.user_answer}
+                                    </ReactMarkdown>
+                                  </div>
+                                </div>
+                                <div className="p-4 bg-green-500/10 border border-green-500/20 rounded-xl">
+                                  <h4 className="text-xs font-bold text-green-400 mb-2 uppercase tracking-wider">正确答案</h4>
+                                  <div className="text-white/80 text-sm prose-sm prose-invert">
+                                    <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                                      {item.correct_answer}
+                                    </ReactMarkdown>
+                                  </div>
+                                </div>
+                              </div>
+                              
+                              {item.ai_analysis && (
+                                <div className="p-4 bg-white/5 border border-white/10 rounded-xl mt-2">
+                                  <h4 className="text-xs font-bold text-[#00ffd1] mb-2 uppercase tracking-wider flex items-center gap-2">
+                                    <Bot size={14} /> AI 解析
+                                  </h4>
+                                  <div className="text-white/70 text-sm leading-relaxed prose-sm prose-invert max-w-none">
+                                    <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                                      {item.ai_analysis}
+                                    </ReactMarkdown>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
 
             </motion.div>
           ) : focusingTask ? (
@@ -987,15 +1329,15 @@ function App() {
                     {/* Submit Button */}
                     <motion.div variants={itemVariants} className="pt-2 sm:pt-4">
                       <button 
-                        onClick={handleAddTodo}
-                        className="group relative w-full py-3 sm:py-4 rounded-xl bg-gradient-to-r from-[#8a5cff] to-[#00ffd1] text-black font-extrabold text-base sm:text-lg tracking-widest uppercase overflow-hidden transition-transform hover:scale-[1.02] active:scale-[0.98] shadow-[0_10px_40px_-10px_rgba(138,92,255,0.6)]"
-                      >
-                        <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300 ease-out" />
-                        <span className="relative z-10 flex items-center justify-center gap-2">
-                          <Zap size={20} className="fill-black" />
-                          注入能量
-                        </span>
-                      </button>
+                    onClick={handleSaveTodo}
+                    className="group relative w-full py-3 sm:py-4 rounded-xl bg-gradient-to-r from-[#8a5cff] to-[#00ffd1] text-black font-extrabold text-base sm:text-lg tracking-widest uppercase overflow-hidden transition-transform hover:scale-[1.02] active:scale-[0.98] shadow-[0_10px_40px_-10px_rgba(138,92,255,0.6)]"
+                  >
+                    <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300 ease-out" />
+                    <span className="relative z-10 flex items-center justify-center gap-2">
+                      <Zap size={20} className="fill-black" />
+                      {editingTodoId ? '保存修改' : '注入能量'}
+                    </span>
+                  </button>
                     </motion.div>
 
                   </div>
@@ -1004,6 +1346,20 @@ function App() {
             </div>
           )}
         </AnimatePresence>
+
+        {/* AI Quiz Modal */}
+        <QuizModal
+          isOpen={isQuizOpen}
+          onClose={() => {
+            setIsQuizOpen(false);
+            setQuizTaskId(null);
+            setQuizTopic('');
+          }}
+          topic={quizTopic}
+          taskId={quizTaskId}
+          userId={session?.user?.id}
+          availableSubjects={allSubjects}
+        />
 
       </div>
     </div>
