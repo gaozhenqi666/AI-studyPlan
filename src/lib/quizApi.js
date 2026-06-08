@@ -41,10 +41,10 @@ export const generateSimilarQuestion = async (originalQuestion, analysis) => {
   }
 };
 
-export const generateQuiz = async (topic) => {
+export const generateQuiz = async (topic, count = 3) => {
   try {
     const { client: openai, model } = getAIClient();
-    const prompt = `你是一个非常专业且平易近人的各学科出题老师。请根据用户提供的学习主题：“${topic}”，生成 3 道相关的练习题。
+    const prompt = `你是一个非常专业且平易近人的各学科出题老师。请根据用户提供的学习主题："${topic}"，生成 ${count} 道相关的练习题。
 这可能是高数、物理、英语或任何学科。
 要求：
 1. 题目难度适中。
@@ -114,7 +114,13 @@ export const gradeQuiz = async (quizData, userAnswers) => {
 
     const content = response.choices[0].message.content.trim();
     const jsonStr = content.replace(/^```json\s*/, '').replace(/```$/, '').trim();
-    return JSON.parse(jsonStr);
+    const result = JSON.parse(jsonStr);
+    // Override score: compute from isCorrect fields to avoid AI miscalculation
+    if (result.details && result.details.length > 0) {
+      const correctCount = result.details.filter(d => d.isCorrect).length;
+      result.score = Math.round((correctCount / result.details.length) * 100);
+    }
+    return result;
   } catch (error) {
     console.error("批改题目失败:", error);
     throw error;

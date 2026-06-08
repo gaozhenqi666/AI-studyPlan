@@ -219,10 +219,49 @@ function App() {
     }
   };
 
+  const deleteWrongBookItem = async (itemId) => {
+    await supabase.from('wrong_book').delete().eq('id', itemId);
+    setConfirmDeleteWrongId(null);
+    fetchWrongBook();
+  };
+
+  const clearAllWrongBookItems = async (subject) => {
+    await supabase.from('wrong_book').delete().eq('subject', subject);
+    // Keep subject in customSubjects so the empty book remains visible
+    if (!customSubjects.includes(subject)) {
+      setCustomSubjects(prev => [...prev, subject]);
+    }
+    setConfirmClearSubject(null);
+    fetchWrongBook();
+  };
+
+  const deleteSubject = async (subject) => {
+    if (subject === '__all__') {
+      // Delete all wrong book records
+      await supabase.from('wrong_book').delete().neq('id', 0); // delete all rows
+      setCustomSubjects([]);
+      setSelectedSubject(null);
+      setConfirmDeleteSubject(null);
+      fetchWrongBook();
+      return;
+    }
+    await supabase.from('wrong_book').delete().eq('subject', subject);
+    // Remove from customSubjects if present
+    setCustomSubjects(prev => prev.filter(s => s !== subject));
+    if (selectedSubject === subject) setSelectedSubject(null);
+    setConfirmDeleteSubject(null);
+    fetchWrongBook();
+  };
+
   const [isAdding, setIsAdding] = useState(false);
   const [editingTodoId, setEditingTodoId] = useState(null);
   const [isAIOpen, setIsAIOpen] = useState(false);
   const [isAIConfigOpen, setIsAIConfigOpen] = useState(false);
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
+  const [confirmDeleteTodoId, setConfirmDeleteTodoId] = useState(null); // single todo item
+  const [confirmDeleteWrongId, setConfirmDeleteWrongId] = useState(null); // single wrong book item
+  const [confirmClearSubject, setConfirmClearSubject] = useState(null); // clear all for a subject
+  const [confirmDeleteSubject, setConfirmDeleteSubject] = useState(null); // delete a subject
 
   // Form State
   const [itemType, setItemType] = useState('task');
@@ -398,8 +437,14 @@ function App() {
     }
   };
 
-  const handleDeleteTodo = async (id, e) => {
+  const handleDeleteTodo = (id, e) => {
     e.stopPropagation();
+    setConfirmDeleteTodoId(id);
+  };
+
+  const confirmDeleteTodo = async () => {
+    const id = confirmDeleteTodoId;
+    setConfirmDeleteTodoId(null);
     const { error } = await supabase.from('todos').delete().eq('id', id);
     if (!error) {
       setTodos(todos.filter(t => t.id !== id));
@@ -960,13 +1005,24 @@ function App() {
                             </button>
                           </div>
                         ) : (
-                          <button
-                            onClick={() => setIsAddingSubject(true)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-white/70 hover:text-white hover:bg-white/10 text-sm font-bold transition-all"
-                          >
-                            <Plus size={16} />
-                            新增科目
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => setIsAddingSubject(true)}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10 text-white/70 hover:text-white hover:bg-white/10 text-sm font-bold transition-all"
+                            >
+                              <Plus size={16} />
+                              新增科目
+                            </button>
+                            {allSubjects.length > 0 && (
+                              <button
+                                onClick={() => setConfirmDeleteSubject('__all__')}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400/70 hover:text-red-400 hover:bg-red-500/20 text-sm font-bold transition-all"
+                              >
+                                <Trash2 size={16} />
+                                全部删除
+                              </button>
+                            )}
+                          </div>
                         )}
                       </div>
 
@@ -982,16 +1038,24 @@ function App() {
                             return (
                               <div
                                 key={idx}
-                                onClick={() => setSelectedSubject(subject)}
                                 className="group cursor-pointer relative aspect-[3/4] rounded-r-xl rounded-l-sm bg-gradient-to-br from-white/10 to-white/5 border border-white/10 border-l-[4px] border-l-[#ff5c7a]/70 hover:border-l-[#ff5c7a] p-3 sm:p-4 flex flex-col transition-all hover:scale-[1.02] hover:shadow-[0_8px_20px_-10px_rgba(255,92,122,0.4)]"
                               >
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setConfirmDeleteSubject(subject); }}
+                                  className="absolute top-2 right-2 p-1.5 rounded-full bg-black/40 border border-white/10 text-white/20 hover:text-red-400 hover:bg-red-500/10 hover:border-red-500/20 opacity-0 group-hover:opacity-100 transition-all z-10"
+                                  title="删除科目"
+                                >
+                                  <Trash2 size={12} />
+                                </button>
                                 <div className="absolute top-0 right-0 w-12 h-12 bg-white/5 rounded-bl-full pointer-events-none transition-all group-hover:bg-[#ff5c7a]/10" />
-                                <BookOpen size={20} className="text-[#ff5c7a]/70 mb-3 group-hover:text-[#ff5c7a] transition-colors" />
-                                <h4 className="text-sm sm:text-base font-bold text-white/90 leading-tight mb-2 line-clamp-2">{subject}</h4>
-                                <div className="mt-auto flex items-center justify-between">
-                                  <span className="text-[10px] font-bold tracking-wider text-white/40 group-hover:text-white/70 transition-colors">
-                                    {count} 道错题
-                                  </span>
+                                <div onClick={() => setSelectedSubject(subject)} className="flex-1 flex flex-col">
+                                  <BookOpen size={20} className="text-[#ff5c7a]/70 mb-3 group-hover:text-[#ff5c7a] transition-colors" />
+                                  <h4 className="text-sm sm:text-base font-bold text-white/90 leading-tight mb-2 line-clamp-2">{subject}</h4>
+                                  <div className="mt-auto flex items-center justify-between">
+                                    <span className="text-[10px] font-bold tracking-wider text-white/40 group-hover:text-white/70 transition-colors">
+                                      {count} 道错题
+                                    </span>
+                                  </div>
                                 </div>
                               </div>
                             );
@@ -1012,6 +1076,13 @@ function App() {
                           <BookOpen size={20} className="text-[#ff5c7a]" />
                           {selectedSubject}
                         </h3>
+                        <button
+                          onClick={() => setConfirmClearSubject(selectedSubject)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400/70 hover:text-red-400 hover:bg-red-500/20 text-sm font-bold transition-all"
+                        >
+                          <Trash2 size={14} />
+                          清空全部
+                        </button>
                       </div>
                       
                       {wrongBookData.filter(item => item.subject === selectedSubject).length === 0 ? (
@@ -1022,11 +1093,18 @@ function App() {
                       ) : (
                         <div className="grid gap-6">
                           {wrongBookData.filter(item => item.subject === selectedSubject).map((item) => (
-                            <div key={item.id} className="p-6 bg-white/5 border border-white/10 rounded-2xl flex flex-col gap-4">
+                            <div key={item.id} className="group/item p-6 bg-white/5 border border-white/10 rounded-2xl flex flex-col gap-4">
                               <div className="flex items-center justify-between">
                                 <span className="text-xs text-white/40 font-mono">
                                   {new Date(item.created_at).toLocaleDateString()}
                                 </span>
+                                <button
+                                  onClick={() => setConfirmDeleteWrongId(item.id)}
+                                  className="p-1.5 rounded-full text-white/0 group-hover/item:text-white/30 hover:text-red-400 hover:bg-red-500/10 transition-all opacity-0 group-hover/item:opacity-100"
+                                  title="删除"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
                               </div>
                               
                               <div className="text-white/90 font-medium leading-relaxed prose-sm prose-invert">
@@ -1080,6 +1158,7 @@ function App() {
             <RoadmapView
               session={session}
               onBatchAddTodos={handleBatchAddTodos}
+              onNavigateToTodo={() => setCurrentView('todo')}
             />
           ) : focusingTask ? (
             <motion.div
@@ -1181,23 +1260,60 @@ function App() {
                   }}
                 >
                   <div className="h-full overflow-y-auto pb-32 pt-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-                    <Reorder.Group axis="y" values={activeTodos} onReorder={handleReorder} className="flex flex-col">
-                      <AnimatePresence mode="popLayout">
-                        {activeTodos.map(todo => renderActiveItem(todo))}
-                      </AnimatePresence>
-                    </Reorder.Group>
-
-                    {completedTodos.length > 0 && (
-                      <motion.div layout className="flex flex-col mt-4">
-                        <div className="flex items-center gap-3 mb-6 mt-4">
-                          <div className="flex-1 h-px bg-gradient-to-r from-transparent via-white/20 to-white/20"></div>
-                          <span className="text-xs font-black tracking-[0.2em] uppercase text-white/80 drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">今日学习记录</span>
-                          <div className="flex-1 h-px bg-gradient-to-l from-transparent via-white/20 to-white/20"></div>
+                    {activeTodos.length === 0 && completedTodos.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center h-full gap-6 text-white/50">
+                        <div className="relative">
+                          <div className="w-24 h-24 rounded-full bg-white/10 border border-white/15 flex items-center justify-center">
+                            <Target size={40} className="opacity-50" />
+                          </div>
+                          <motion.div
+                            animate={{ scale: [1, 1.3, 1], opacity: [0.4, 0.8, 0.4] }}
+                            transition={{ repeat: Infinity, duration: 2.5, ease: "easeInOut" }}
+                            className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-[#00ffd1]/30 border border-[#00ffd1]/50"
+                          />
                         </div>
-                        <AnimatePresence mode="popLayout">
-                          {completedTodos.map(todo => renderCompletedItem(todo))}
-                        </AnimatePresence>
-                      </motion.div>
+                        <div className="flex flex-col items-center gap-2">
+                          <span className="text-lg font-black tracking-widest uppercase text-white/70">今日待办</span>
+                          <span className="text-xs font-bold tracking-[0.3em] text-white/40">点击右下角 + 添加第一个任务</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <Reorder.Group axis="y" values={activeTodos} onReorder={handleReorder} className="flex flex-col">
+                          <AnimatePresence mode="popLayout">
+                            {activeTodos.map(todo => renderActiveItem(todo))}
+                          </AnimatePresence>
+                        </Reorder.Group>
+
+                        {completedTodos.length > 0 && (
+                           <motion.div layout className="flex flex-col mt-4">
+                             <div className="flex items-center gap-3 mb-6 mt-4">
+                               <div className="flex-1 h-px bg-gradient-to-r from-transparent via-white/20 to-white/20"></div>
+                               <span className="text-xs font-black tracking-[0.2em] uppercase text-white/80 drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">今日学习记录</span>
+                               <div className="flex-1 h-px bg-gradient-to-l from-transparent via-white/20 to-white/20"></div>
+                             </div>
+                             <AnimatePresence mode="popLayout">
+                               {completedTodos.map(todo => renderCompletedItem(todo))}
+                             </AnimatePresence>
+                           </motion.div>
+                         )}
+
+                         {activeTodos.length > 0 && (
+                           <motion.div
+                             initial={{ opacity: 0 }}
+                             animate={{ opacity: 1 }}
+                             className="flex justify-center mt-8 pb-4"
+                           >
+                             <button
+                                onClick={() => setConfirmDeleteAll(true)}
+                                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400/60 hover:text-red-400 hover:bg-red-500/20 text-xs font-bold tracking-wider transition-all"
+                              >
+                                <Trash2 size={14} />
+                                清空全部待办
+                              </button>
+                           </motion.div>
+                         )}
+                      </>
                     )}
                   </div>
                 </div>
@@ -1396,6 +1512,249 @@ function App() {
           userId={session?.user?.id}
           availableSubjects={allSubjects}
         />
+
+        {/* Confirm Delete Single Todo */}
+        <AnimatePresence>
+          {confirmDeleteTodoId && (
+            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 sm:p-6">
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+                onClick={() => setConfirmDeleteTodoId(null)}
+              />
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="relative w-full max-w-md bg-[#0b0b0b] border border-white/10 rounded-[24px] shadow-2xl overflow-hidden"
+              >
+                <div className="p-6 flex flex-col items-center gap-4">
+                  <div className="w-14 h-14 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center">
+                    <Trash2 size={28} className="text-red-400" />
+                  </div>
+                  <div className="text-center space-y-2">
+                    <div className="text-lg font-extrabold text-white">确认删除任务？</div>
+                    <div className="text-sm text-white/50">此操作不可撤销。</div>
+                  </div>
+                  <div className="flex gap-3 w-full pt-2">
+                    <button
+                      onClick={() => setConfirmDeleteTodoId(null)}
+                      className="flex-1 px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white/70 hover:bg-white/10 text-sm font-bold transition-all"
+                    >
+                      取消
+                    </button>
+                    <button
+                      onClick={confirmDeleteTodo}
+                      className="flex-1 px-4 py-3 rounded-xl bg-red-500/90 text-white font-extrabold text-sm hover:bg-red-500 transition-all"
+                    >
+                      确认删除
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* Delete All Confirmation Modal */}
+        <AnimatePresence>
+          {confirmDeleteAll && (
+            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 sm:p-6">
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+                onClick={() => setConfirmDeleteAll(false)}
+              />
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="relative w-full max-w-md bg-[#0b0b0b] border border-white/10 rounded-[24px] shadow-2xl overflow-hidden"
+              >
+                <div className="p-6 flex flex-col items-center gap-4">
+                  <div className="w-14 h-14 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center">
+                    <Trash2 size={28} className="text-red-400" />
+                  </div>
+                  <div className="text-center space-y-2">
+                    <div className="text-lg font-extrabold text-white">确认清空全部待办？</div>
+                    <div className="text-sm text-white/50">
+                      将删除全部 <span className="text-red-400 font-bold">{activeTodos.length}</span> 个未完成任务，此操作不可撤销。
+                    </div>
+                  </div>
+                  <div className="flex gap-3 w-full pt-2">
+                    <button
+                      onClick={() => setConfirmDeleteAll(false)}
+                      className="flex-1 px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white/70 hover:bg-white/10 text-sm font-bold transition-all"
+                    >
+                      取消
+                    </button>
+                    <button
+                      onClick={() => {
+                        Promise.all(
+                          activeTodos.map(t => supabase.from('todos').delete().eq('id', t.id))
+                        ).then(() => {
+                          setTodos(prev => prev.filter(t => t.completed));
+                          setConfirmDeleteAll(false);
+                        });
+                      }}
+                      className="flex-1 px-4 py-3 rounded-xl bg-red-500/90 text-white font-extrabold text-sm hover:bg-red-500 transition-all"
+                    >
+                      确认删除
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* Confirm Delete Single Wrong Book Item */}
+        <AnimatePresence>
+          {confirmDeleteWrongId && (
+            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 sm:p-6">
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+                onClick={() => setConfirmDeleteWrongId(null)}
+              />
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="relative w-full max-w-md bg-[#0b0b0b] border border-white/10 rounded-[24px] shadow-2xl overflow-hidden"
+              >
+                <div className="p-6 flex flex-col items-center gap-4">
+                  <div className="w-14 h-14 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center">
+                    <Trash2 size={28} className="text-red-400" />
+                  </div>
+                  <div className="text-center space-y-2">
+                    <div className="text-lg font-extrabold text-white">确认删除这道错题？</div>
+                    <div className="text-sm text-white/50">此操作不可撤销。</div>
+                  </div>
+                  <div className="flex gap-3 w-full pt-2">
+                    <button
+                      onClick={() => setConfirmDeleteWrongId(null)}
+                      className="flex-1 px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white/70 hover:bg-white/10 text-sm font-bold transition-all"
+                    >
+                      取消
+                    </button>
+                    <button
+                      onClick={() => deleteWrongBookItem(confirmDeleteWrongId)}
+                      className="flex-1 px-4 py-3 rounded-xl bg-red-500/90 text-white font-extrabold text-sm hover:bg-red-500 transition-all"
+                    >
+                      确认删除
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* Confirm Clear All Items for a Subject */}
+        <AnimatePresence>
+          {confirmClearSubject && (
+            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 sm:p-6">
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+                onClick={() => setConfirmClearSubject(null)}
+              />
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="relative w-full max-w-md bg-[#0b0b0b] border border-white/10 rounded-[24px] shadow-2xl overflow-hidden"
+              >
+                <div className="p-6 flex flex-col items-center gap-4">
+                  <div className="w-14 h-14 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center">
+                    <Trash2 size={28} className="text-red-400" />
+                  </div>
+                  <div className="text-center space-y-2">
+                    <div className="text-lg font-extrabold text-white">确认清空「{confirmClearSubject}」？</div>
+                    <div className="text-sm text-white/50">
+                      将删除 <span className="text-red-400 font-bold">{wrongBookData.filter(item => item.subject === confirmClearSubject).length}</span> 道错题，此操作不可撤销。
+                    </div>
+                  </div>
+                  <div className="flex gap-3 w-full pt-2">
+                    <button
+                      onClick={() => setConfirmClearSubject(null)}
+                      className="flex-1 px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white/70 hover:bg-white/10 text-sm font-bold transition-all"
+                    >
+                      取消
+                    </button>
+                    <button
+                      onClick={() => clearAllWrongBookItems(confirmClearSubject)}
+                      className="flex-1 px-4 py-3 rounded-xl bg-red-500/90 text-white font-extrabold text-sm hover:bg-red-500 transition-all"
+                    >
+                      确认清空
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
+
+        {/* Confirm Delete Subject */}
+        <AnimatePresence>
+          {confirmDeleteSubject && (
+            <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 sm:p-6">
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+                onClick={() => setConfirmDeleteSubject(null)}
+              />
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                className="relative w-full max-w-md bg-[#0b0b0b] border border-white/10 rounded-[24px] shadow-2xl overflow-hidden"
+              >
+                <div className="p-6 flex flex-col items-center gap-4">
+                  <div className="w-14 h-14 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center">
+                    <Trash2 size={28} className="text-red-400" />
+                  </div>
+                  <div className="text-center space-y-2">
+                    <div className="text-lg font-extrabold text-white">
+                      {confirmDeleteSubject === '__all__' ? '确认删除全部科目？' : `确认删除「${confirmDeleteSubject}」？`}
+                    </div>
+                    <div className="text-sm text-white/50">
+                      {confirmDeleteSubject === '__all__'
+                        ? <>将删除全部 <span className="text-red-400 font-bold">{allSubjects.length}</span> 个科目及其所有错题，此操作不可撤销。</>
+                        : <>将删除「{confirmDeleteSubject}」及其 <span className="text-red-400 font-bold">{wrongBookData.filter(item => item.subject === confirmDeleteSubject).length}</span> 道错题，此操作不可撤销。</>
+                      }
+                    </div>
+                  </div>
+                  <div className="flex gap-3 w-full pt-2">
+                    <button
+                      onClick={() => setConfirmDeleteSubject(null)}
+                      className="flex-1 px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white/70 hover:bg-white/10 text-sm font-bold transition-all"
+                    >
+                      取消
+                    </button>
+                    <button
+                      onClick={() => deleteSubject(confirmDeleteSubject)}
+                      className="flex-1 px-4 py-3 rounded-xl bg-red-500/90 text-white font-extrabold text-sm hover:bg-red-500 transition-all"
+                    >
+                      确认删除
+                    </button>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
 
       </div>
     </div>

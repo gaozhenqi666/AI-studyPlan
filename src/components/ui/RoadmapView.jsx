@@ -1,5 +1,5 @@
-import { AnimatePresence, motion } from 'framer-motion';
-import { BookOpen, Bot, CalendarDays, CheckCircle2, ChevronLeft, ClipboardList, Edit2, GripVertical, Loader2, Plus, Save, Sparkles, Target, Timer, Trash2, Trophy, X } from 'lucide-react';
+import { AnimatePresence, motion, Reorder } from 'framer-motion';
+import { ArrowRightLeft, BookOpen, Bot, CalendarDays, CheckCircle2, ChevronLeft, ClipboardList, Edit2, GripVertical, Loader2, Plus, Save, Sparkles, Target, Timer, Trash2, Trophy, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { getAIClient } from '../../lib/aiClient';
@@ -10,7 +10,7 @@ const formatDow = (dow) => {
   return typeof dow === 'number' ? map[dow] : '';
 };
 
-const RoadmapView = ({ session, onBatchAddTodos }) => {
+const RoadmapView = ({ session, onBatchAddTodos, onNavigateToTodo }) => {
   const [roadmaps, setRoadmaps] = useState([]);
   const [selectedRoadmap, setSelectedRoadmap] = useState(null);
   const [nodes, setNodes] = useState([]);
@@ -50,9 +50,13 @@ const RoadmapView = ({ session, onBatchAddTodos }) => {
   const [isAIFillingDetails, setIsAIFillingDetails] = useState(false);
   const [aiDetailsPreview, setAiDetailsPreview] = useState(null);
 
-  // Drag & drop
-  const [dragNodeId, setDragNodeId] = useState(null);
-  const [dragOverTarget, setDragOverTarget] = useState(null);
+  // Move block popover
+  const [moveBlockId, setMoveBlockId] = useState(null);
+
+  // Confirmation states for delete operations
+  const [confirmDeleteRoadmap, setConfirmDeleteRoadmap] = useState(null);
+  const [confirmDeleteAllRoadmaps, setConfirmDeleteAllRoadmaps] = useState(false);
+  const [confirmDeleteNode, setConfirmDeleteNode] = useState(false);
 
   // Manual exam
   const [showManualExam, setShowManualExam] = useState(false);
@@ -127,6 +131,11 @@ const RoadmapView = ({ session, onBatchAddTodos }) => {
     return grouped;
   }, [blockNodes]);
 
+  const sortedStages = useMemo(() =>
+    [...stageNodes].sort((a, b) => (a.order_index || 0) - (b.order_index || 0)),
+    [stageNodes]
+  );
+
   const handleCreateRoadmap = async () => {
     if (!newTitle.trim()) return;
 
@@ -152,6 +161,47 @@ const RoadmapView = ({ session, onBatchAddTodos }) => {
       setMonthlyEnabled(false);
       await loadRoadmaps();
       await loadDetail(data);
+    }
+  };
+
+  const deleteRoadmap = (rmId, e) => {
+    e.stopPropagation();
+    setConfirmDeleteRoadmap(rmId);
+  };
+
+  const confirmDeleteRoadmapAction = async () => {
+    const rmId = confirmDeleteRoadmap;
+    setConfirmDeleteRoadmap(null);
+    const { error } = await supabase
+      .from('roadmaps')
+      .delete()
+      .eq('id', rmId)
+      .eq('user_id', session.user.id);
+    if (!error) {
+      if (selectedRoadmap?.id === rmId) {
+        setSelectedRoadmap(null);
+        setNodes([]);
+        setExams([]);
+      }
+      setRoadmaps(prev => prev.filter(r => r.id !== rmId));
+    }
+  };
+
+  const deleteAllRoadmaps = () => {
+    setConfirmDeleteAllRoadmaps(true);
+  };
+
+  const confirmDeleteAllRoadmapsAction = async () => {
+    setConfirmDeleteAllRoadmaps(false);
+    const { error } = await supabase
+      .from('roadmaps')
+      .delete()
+      .eq('user_id', session.user.id);
+    if (!error) {
+      setSelectedRoadmap(null);
+      setNodes([]);
+      setExams([]);
+      setRoadmaps([]);
     }
   };
 
@@ -229,9 +279,13 @@ const RoadmapView = ({ session, onBatchAddTodos }) => {
     }
   };
 
-  const deleteNode = async () => {
+  const deleteNode = () => {
     if (!selectedNode) return;
-    if (!window.confirm('确认删除这个节点吗？')) return;
+    setConfirmDeleteNode(true);
+  };
+
+  const confirmDeleteNodeAction = async () => {
+    setConfirmDeleteNode(false);
     try {
       const { error } = await supabase
         .from('roadmap_nodes')
@@ -246,64 +300,63 @@ const RoadmapView = ({ session, onBatchAddTodos }) => {
     }
   };
 
-  const handleDragDrop = async (draggedId, targetId, targetType) => {
-    if (!selectedRoadmap || draggedId === targetId) return;
-    const draggedNode = nodes.find(n => n.id === draggedId);
-    if (!draggedNode) return;
+  const handleMoveBlock = async (blockId, newParentId) => {
+    // newParentId: null = root, string = stage id
+    await supabase
+      .from('roadmap_nodes')
+      .update({ parent_id: newParentId || null })
+      .eq('id', blockId)
+      .eq('user_id', session.user.id);
+    const { data } = await supabase
+      .from('roadmap_nodes')
+      .select('*')
+      .eq('roadmap_id', selectedRoadmap.id)
+      .eq('user_id', session.user.id)
+      .order('order_index', { ascending: true });
+    if (data) setNodes(data);
+    setMoveBlockId(null);
+  };
 
-    try {
-      if (targetType === 'stage') {
-        // Drop a block onto a stage → set parent_id
-        if (draggedNode.node_type !== 'block') return;
+  const handleStageReorder = async (reorderedStages) => {
+    for (let i = 0; i < reorderedStages.length; i++) {
+      const stage = reorderedStages[i];
+      if (stage.order_index !== i + 1) {
         await supabase
           .from('roadmap_nodes')
-          .update({ parent_id: targetId })
-          .eq('id', draggedId)
+          .update({ order_index: i + 1 })
+          .eq('id', stage.id)
           .eq('user_id', session.user.id);
-      } else if (targetType === 'root') {
-        // Drop onto ungrouped area → clear parent_id
-        await supabase
-          .from('roadmap_nodes')
-          .update({ parent_id: null })
-          .eq('id', draggedId)
-          .eq('user_id', session.user.id);
-      } else if (targetType === 'node') {
-        // Drop between nodes → reorder
-        const targetNode = nodes.find(n => n.id === targetId);
-        if (!targetNode) return;
-        const sameParentNodes = nodes
-          .filter(n => (n.parent_id || '__root__') === (draggedNode.parent_id || '__root__'))
-          .sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
-        const draggedIdx = sameParentNodes.findIndex(n => n.id === draggedId);
-        const targetIdx = sameParentNodes.findIndex(n => n.id === targetId);
-        if (draggedIdx === -1 || targetIdx === -1) return;
-        // Reorder: move dragged to before target
-        const reordered = [...sameParentNodes];
-        reordered.splice(draggedIdx, 1);
-        const newTargetIdx = reordered.findIndex(n => n.id === targetId);
-        reordered.splice(newTargetIdx, 0, draggedNode);
-        // Update order_index for all affected nodes
-        for (let i = 0; i < reordered.length; i++) {
-          if (reordered[i].order_index !== i + 1) {
-            await supabase
-              .from('roadmap_nodes')
-              .update({ order_index: i + 1 })
-              .eq('id', reordered[i].id)
-              .eq('user_id', session.user.id);
-          }
-        }
       }
-      // Refresh nodes
-      const { data } = await supabase
-        .from('roadmap_nodes')
-        .select('*')
-        .eq('roadmap_id', selectedRoadmap.id)
-        .eq('user_id', session.user.id)
-        .order('order_index', { ascending: true });
-      if (data) setNodes(data);
-    } catch (e) {
-      alert(`拖拽失败：${e?.message || '未知错误'}`);
     }
+    const { data } = await supabase
+      .from('roadmap_nodes')
+      .select('*')
+      .eq('roadmap_id', selectedRoadmap.id)
+      .eq('user_id', session.user.id)
+      .order('order_index', { ascending: true });
+    if (data) setNodes(data);
+  };
+
+  const handleBlockReorder = async (stageId, reorderedBlocks) => {
+    for (let i = 0; i < reorderedBlocks.length; i++) {
+      const block = reorderedBlocks[i];
+      const updates = { order_index: i + 1 };
+      if (block.parent_id !== stageId) {
+        updates.parent_id = stageId === '__root__' ? null : stageId;
+      }
+      await supabase
+        .from('roadmap_nodes')
+        .update(updates)
+        .eq('id', block.id)
+        .eq('user_id', session.user.id);
+    }
+    const { data } = await supabase
+      .from('roadmap_nodes')
+      .select('*')
+      .eq('roadmap_id', selectedRoadmap.id)
+      .eq('user_id', session.user.id)
+      .order('order_index', { ascending: true });
+    if (data) setNodes(data);
   };
 
   const generateTasksFromDetails = async ({ roadmap, node, dayIndex, details }) => {
@@ -430,6 +483,9 @@ const RoadmapView = ({ session, onBatchAddTodos }) => {
       .eq('user_id', session.user.id);
     setNodes(prev => prev.map(n => n.id === selectedNode.id ? { ...n, metadata: nextMeta, status: 'in_progress' } : n));
     setApplyPreview(null);
+    setTimeout(() => {
+      onNavigateToTodo?.();
+    }, 150);
   };
 
   // ─── AI Generate Roadmap ───────────────────────────────
@@ -451,6 +507,7 @@ ${aiGoal.trim()}
     {
       "title": "阶段名称（如：第一阶段 基础入门）",
       "order_index": 1,
+      "summary": "这个阶段的概述说明，简明描述本阶段的学习目标、核心内容和预期成果（50-100字）",
       "blocks": [
         {
           "title": "Block 标题（简洁明确）",
@@ -466,10 +523,11 @@ ${aiGoal.trim()}
 要求：
 1. 根据目标复杂度，分成 2-5 个阶段
 2. 每个阶段有 2-6 个 Block
-3. 每个 Block 默认 60 分钟，planned_minutes 可调
-4. 每个 Block 的 details 必须是详细的长文本，描述每天的学习内容和练习方式
-5. mode 固定为 "learn"
-6. 标题用中文，内容用中文`;
+3. 每个阶段必须填写 summary 字段，简明描述本阶段的学习目标和内容概要
+4. 每个 Block 默认 60 分钟，planned_minutes 可调
+5. 每个 Block 的 details 必须是详细的长文本，描述每天的学习内容和练习方式
+6. mode 固定为 "learn"
+7. 标题用中文，内容用中文`;
 
       const res = await openai.chat.completions.create({
         model,
@@ -519,7 +577,12 @@ ${aiGoal.trim()}
           node_type: 'stage',
           title: stage.title,
           order_index: globalOrder,
-          status: 'pending'
+          status: 'pending',
+          metadata: stage.summary ? {
+            details: stage.summary,
+            details_version: 1,
+            current_day_index: 1
+          } : null
         });
 
         for (const block of (stage.blocks || [])) {
@@ -632,11 +695,18 @@ ${existingDetails ? `【现有详情】${existingDetails}` : ''}
   const confirmFillDetails = () => {
     if (!aiDetailsPreview || !selectedNode) return;
     const meta = getNodeMeta(selectedNode);
-    const nextMeta = {
+    // 先清空原有详情内容
+    const clearedMeta = {
       ...meta,
-      details: aiDetailsPreview,
+      details: '',
       details_version: (meta.details_version || 0) + 1,
       current_day_index: meta.current_day_index || 1
+    };
+    // 再填入 AI 生成的新详情
+    const nextMeta = {
+      ...clearedMeta,
+      details: aiDetailsPreview,
+      details_version: (clearedMeta.details_version || 0) + 1
     };
     updateSelectedNode({ metadata: nextMeta });
     supabase
@@ -907,6 +977,15 @@ ${exam.scope ? `【考试范围】${JSON.stringify(exam.scope)}` : ''}
                 <Plus size={16} />
                 新建
               </button>
+              {roadmaps.length > 0 && (
+                <button
+                  onClick={deleteAllRoadmaps}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400/70 hover:text-red-400 hover:bg-red-500/20 text-sm font-bold transition-all"
+                >
+                  <Trash2 size={16} />
+                  全部删除
+                </button>
+              )}
             </div>
           </div>
 
@@ -918,11 +997,18 @@ ${exam.scope ? `【考试范围】${JSON.stringify(exam.scope)}` : ''}
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {roadmaps.map(rm => (
-                <button
+                <div
                   key={rm.id}
+                  className="relative group text-left p-6 bg-white/5 border border-white/10 rounded-2xl hover:bg-white/10 transition-colors cursor-pointer"
                   onClick={() => loadDetail(rm)}
-                  className="text-left p-6 bg-white/5 border border-white/10 rounded-2xl hover:bg-white/10 transition-colors"
                 >
+                  <button
+                    onClick={(e) => deleteRoadmap(rm.id, e)}
+                    className="absolute top-3 right-3 p-2 rounded-xl bg-black/40 border border-white/10 text-white/30 hover:text-red-400 hover:bg-red-500/10 hover:border-red-500/20 opacity-0 group-hover:opacity-100 transition-all"
+                    title="删除"
+                  >
+                    <Trash2 size={14} />
+                  </button>
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex flex-col gap-2">
                       <div className="flex items-center gap-2">
@@ -937,7 +1023,7 @@ ${exam.scope ? `【考试范围】${JSON.stringify(exam.scope)}` : ''}
                       {rm.mode === 'sprint' ? '冲刺' : '新知'}
                     </div>
                   </div>
-                </button>
+                </div>
               ))}
             </div>
           )}
@@ -989,142 +1075,182 @@ ${exam.scope ? `【考试范围】${JSON.stringify(exam.scope)}` : ''}
                 </div>
               ) : (
                 <div className="flex flex-col gap-4">
-                  {stageNodes.sort((a, b) => (a.order_index || 0) - (b.order_index || 0)).map(stage => (
-                    <div
-                      key={stage.id}
-                      className={`p-5 rounded-2xl border transition-all ${dragOverTarget === stage.id ? 'bg-white/10 border-[#ffb800]/50 ring-1 ring-[#ffb800]/30' : 'bg-white/5 border-white/10'}`}
-                      onDragOver={(e) => { e.preventDefault(); setDragOverTarget(stage.id); }}
-                      onDragLeave={() => setDragOverTarget(null)}
-                      onDrop={(e) => { e.preventDefault(); setDragOverTarget(null); handleDragDrop(dragNodeId, stage.id, 'stage'); setDragNodeId(null); }}
-                    >
-                      <div className="flex items-center justify-between gap-3 mb-4">
-                        <div className="flex items-center gap-2">
-                          <div
-                            draggable
-                            onDragStart={() => setDragNodeId(stage.id)}
-                            className="cursor-grab active:cursor-grabbing p-1 text-white/30 hover:text-white/60 transition-colors"
-                          >
-                            <GripVertical size={16} />
-                          </div>
-                          <BookOpen size={18} className="text-[#ffb800]" />
-                          <span className="text-white/90 font-extrabold text-lg">{stage.title}</span>
-                        </div>
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => setSelectedNode({ _isNew: true, node_type: 'block', title: '', planned_minutes: selectedRoadmap.default_block_minutes, parent_id: stage.id, planned_start_date: null, planned_end_date: null, metadata: { details: '', details_version: 1, current_day_index: 1 } })}
-                            className="p-2 rounded-xl bg-white/5 border border-white/10 text-white/60 hover:text-white hover:bg-white/10"
-                            title="添加 Block"
-                          >
-                            <Plus size={16} />
-                          </button>
-                          <button
-                            onClick={() => setSelectedNode(stage)}
-                            className="p-2 rounded-xl bg-white/5 border border-white/10 text-white/60 hover:text-white hover:bg-white/10"
-                            title="编辑阶段"
-                          >
-                            <Edit2 size={16} />
-                          </button>
-                        </div>
-                      </div>
-                      <div className="flex flex-col gap-3">
-                        {(blocksByStage[stage.id] || []).length === 0 ? (
-                          <div className="text-xs text-white/40 font-bold tracking-widest uppercase">暂无 Block（拖拽 Block 到此处）</div>
-                        ) : (
-                          (blocksByStage[stage.id] || []).map(b => (
-                            <div
-                              key={b.id}
-                              draggable
-                              onDragStart={() => setDragNodeId(b.id)}
-                              onDragOver={(e) => { e.preventDefault(); setDragOverTarget(b.id); }}
-                              onDragLeave={() => setDragOverTarget(null)}
-                              onDrop={(e) => { e.preventDefault(); e.stopPropagation(); setDragOverTarget(null); handleDragDrop(dragNodeId, b.id, 'node'); setDragNodeId(null); }}
-                              className={`p-4 rounded-2xl bg-black/30 border transition-all ${dragOverTarget === b.id ? 'border-[#00ffd1]/50 ring-1 ring-[#00ffd1]/30' : 'border-white/10'}`}
-                            >
-                              <div className="flex items-start justify-between gap-4">
-                                <div className="flex items-center gap-2">
-                                  <div className="cursor-grab active:cursor-grabbing p-1 text-white/30 hover:text-white/60 transition-colors">
-                                    <GripVertical size={14} />
-                                  </div>
-                                  <div className="flex flex-col gap-2">
-                                    <div className="text-white/90 font-extrabold">{b.title}</div>
-                                    <div className="text-xs text-white/50 font-bold tracking-widest uppercase">
-                                      {b.planned_minutes || selectedRoadmap.default_block_minutes} MIN · 番茄 {selectedRoadmap.default_pomodoro_minutes}+{selectedRoadmap.default_break_minutes}
-                                    </div>
-                                  </div>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  <div className={`px-3 py-1 rounded-full text-xs font-black tracking-widest ${b.status === 'completed' ? 'bg-green-500/15 text-green-400 border border-green-500/20' : b.status === 'in_progress' ? 'bg-[#00ffd1]/15 text-[#00ffd1] border border-[#00ffd1]/20' : 'bg-white/5 text-white/50 border border-white/10'}`}>
-                                    {b.status === 'completed' ? '已完成' : b.status === 'in_progress' ? '进行中' : '待开始'}
-                                  </div>
-                                  <button
-                                    onClick={() => setSelectedNode(b)}
-                                    className="p-2 rounded-xl bg-white/5 border border-white/10 text-white/60 hover:text-white hover:bg-white/10"
-                                    title="编辑"
-                                  >
-                                    <Edit2 size={16} />
-                                  </button>
-                                </div>
+                  <Reorder.Group axis="y" values={sortedStages} onReorder={handleStageReorder}>
+                    {sortedStages.map(stage => {
+                      const blocksInStage = (blocksByStage[stage.id] || []).sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
+                      return (
+                        <Reorder.Item key={stage.id} value={stage}>
+                          <motion.div layout className="p-5 rounded-2xl border bg-white/5 border-white/10">
+                            <div className="flex items-center justify-between gap-3 mb-4">
+                              <div className="flex items-center gap-2">
+                                <GripVertical size={14} className="text-white/30" />
+                                <BookOpen size={18} className="text-[#ffb800]" />
+                                <span className="text-white/90 font-extrabold text-lg">{stage.title}</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => setSelectedNode({ _isNew: true, node_type: 'block', title: '', planned_minutes: selectedRoadmap.default_block_minutes, parent_id: stage.id, planned_start_date: null, planned_end_date: null, metadata: { details: '', details_version: 1, current_day_index: 1 } })}
+                                  className="p-2 rounded-xl bg-white/5 border border-white/10 text-white/60 hover:text-white hover:bg-white/10"
+                                  title="添加 Block"
+                                >
+                                  <Plus size={16} />
+                                </button>
+                                <button
+                                  onClick={() => setSelectedNode(stage)}
+                                  className="p-2 rounded-xl bg-white/5 border border-white/10 text-white/60 hover:text-white hover:bg-white/10"
+                                  title="编辑阶段"
+                                >
+                                  <Edit2 size={16} />
+                                </button>
                               </div>
                             </div>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                            <div className="flex flex-col gap-3">
+                              {blocksInStage.length === 0 ? (
+                                <div className="text-xs text-white/40 font-bold tracking-widest uppercase">暂无 Block（下方 Block 可拖入此阶段）</div>
+                              ) : (
+                                <Reorder.Group axis="y" values={blocksInStage} onReorder={(vals) => handleBlockReorder(stage.id, vals)}>
+                                  {blocksInStage.map(b => {
+                                    const sBadge = b.status === 'completed' ? '已完成' : b.status === 'in_progress' ? '进行中' : '待开始';
+                                    const sClass = b.status === 'completed' ? 'bg-green-500/15 text-green-400 border border-green-500/20' : b.status === 'in_progress' ? 'bg-[#00ffd1]/15 text-[#00ffd1] border border-[#00ffd1]/20' : 'bg-white/5 text-white/50 border border-white/10';
+                                    return (
+                                      <Reorder.Item key={b.id} value={b}>
+                                        <motion.div layout className="p-4 rounded-2xl bg-black/30 border border-white/10 group">
+                                          <div className="flex items-start justify-between gap-4">
+                                            <div className="flex items-center gap-2 flex-1 min-w-0">
+                                              <GripVertical size={14} className="text-white/30 shrink-0" />
+                                              <div className="flex flex-col gap-2 flex-1 min-w-0">
+                                                <div className="text-white/90 font-extrabold truncate">{b.title}</div>
+                                                <div className="text-xs text-white/50 font-bold tracking-widest uppercase">
+                                                  {b.planned_minutes || selectedRoadmap.default_block_minutes} MIN · 番茄 {selectedRoadmap.default_pomodoro_minutes}+{selectedRoadmap.default_break_minutes}
+                                                </div>
+                                              </div>
+                                            </div>
+                                            <div className="flex items-center gap-1 shrink-0">
+                                              <div className="relative">
+                                                <button
+                                                  onClick={(e) => { e.stopPropagation(); setMoveBlockId(moveBlockId === b.id ? null : b.id); }}
+                                                  className="p-2 rounded-xl opacity-0 group-hover:opacity-100 bg-white/5 border border-white/10 text-white/40 hover:text-[#b998ff] hover:bg-[#b998ff]/10 hover:border-[#b998ff]/20 transition-all"
+                                                  title="移动到其他阶段"
+                                                >
+                                                  <ArrowRightLeft size={14} />
+                                                </button>
+                                                {moveBlockId === b.id && (
+                                                  <div className="absolute right-0 top-full mt-2 w-48 bg-[#1a1a1a] border border-white/10 rounded-xl shadow-2xl z-[300] overflow-hidden" onClick={e => e.stopPropagation()}>
+                                                    {sortedStages.filter(s => s.id !== (b.parent_id || null)).map(s => (
+                                                      <button
+                                                        key={s.id}
+                                                        onClick={() => handleMoveBlock(b.id, s.id)}
+                                                        className="w-full text-left px-4 py-2.5 text-sm text-white/70 hover:text-white hover:bg-white/10 font-bold transition-colors"
+                                                      >
+                                                        {s.title}
+                                                      </button>
+                                                    ))}
+                                                    {b.parent_id && (
+                                                      <button
+                                                        onClick={() => handleMoveBlock(b.id, null)}
+                                                        className="w-full text-left px-4 py-2.5 text-sm text-[#00ffd1]/80 hover:text-[#00ffd1] hover:bg-white/10 font-bold transition-colors border-t border-white/5"
+                                                      >
+                                                        → 移出阶段（独立 Block）
+                                                      </button>
+                                                    )}
+                                                  </div>
+                                                )}
+                                              </div>
+                                              <div className={`px-3 py-1 rounded-full text-xs font-black tracking-widest ${sClass}`}>
+                                                {sBadge}
+                                              </div>
+                                              <button
+                                                onClick={() => setSelectedNode(b)}
+                                                className="p-2 rounded-xl bg-white/5 border border-white/10 text-white/60 hover:text-white hover:bg-white/10"
+                                                title="编辑"
+                                              >
+                                                <Edit2 size={16} />
+                                              </button>
+                                            </div>
+                                          </div>
+                                        </motion.div>
+                                      </Reorder.Item>
+                                    );
+                                  })}
+                                </Reorder.Group>
+                              )}
+                            </div>
+                          </motion.div>
+                        </Reorder.Item>
+                      );
+                    })}
+                  </Reorder.Group>
 
-                  {(blocksByStage.__root__ || []).length > 0 && (
-                    <div
-                      className={`p-5 rounded-2xl border transition-all ${dragOverTarget === '__root__' ? 'bg-white/10 border-[#00ffd1]/50 ring-1 ring-[#00ffd1]/30' : 'bg-white/5 border-white/10'}`}
-                      onDragOver={(e) => { e.preventDefault(); setDragOverTarget('__root__'); }}
-                      onDragLeave={() => setDragOverTarget(null)}
-                      onDrop={(e) => { e.preventDefault(); setDragOverTarget(null); handleDragDrop(dragNodeId, null, 'root'); setDragNodeId(null); }}
-                    >
+                  {stageNodes.length > 0 && (
+                    <motion.div layout className="p-5 rounded-2xl border bg-white/5 border-white/10 border-dashed">
                       <div className="flex items-center justify-between gap-3 mb-4">
                         <div className="text-white/90 font-extrabold text-lg flex items-center gap-2">
                           <Timer size={18} className="text-[#00ffd1]" />
                           未分组 Block
                         </div>
                       </div>
-                      <div className="flex flex-col gap-3">
-                        {(blocksByStage.__root__ || []).map(b => (
-                          <div
-                            key={b.id}
-                            draggable
-                            onDragStart={() => setDragNodeId(b.id)}
-                            onDragOver={(e) => { e.preventDefault(); setDragOverTarget(b.id); }}
-                            onDragLeave={() => setDragOverTarget(null)}
-                            onDrop={(e) => { e.preventDefault(); e.stopPropagation(); setDragOverTarget(null); handleDragDrop(dragNodeId, b.id, 'node'); setDragNodeId(null); }}
-                            className={`p-4 rounded-2xl bg-black/30 border transition-all ${dragOverTarget === b.id ? 'border-[#00ffd1]/50 ring-1 ring-[#00ffd1]/30' : 'border-white/10'}`}
-                          >
-                            <div className="flex items-start justify-between gap-4">
-                              <div className="flex items-center gap-2">
-                                <div className="cursor-grab active:cursor-grabbing p-1 text-white/30 hover:text-white/60 transition-colors">
-                                  <GripVertical size={14} />
-                                </div>
-                                <div className="flex flex-col gap-2">
-                                  <div className="text-white/90 font-extrabold">{b.title}</div>
-                                  <div className="text-xs text-white/50 font-bold tracking-widest uppercase">
-                                    {b.planned_minutes || selectedRoadmap.default_block_minutes} MIN · 番茄 {selectedRoadmap.default_pomodoro_minutes}+{selectedRoadmap.default_break_minutes}
+                      {(blocksByStage.__root__ || []).length === 0 ? (
+                        <div className="text-xs text-white/30 font-bold tracking-widest uppercase py-2">使用 → 按钮将 Block 移出阶段</div>
+                      ) : (
+                        <Reorder.Group axis="y" values={blocksByStage.__root__ || []} onReorder={(vals) => handleBlockReorder('__root__', vals)}>
+                          {(blocksByStage.__root__ || []).map(b => {
+                            const sBadge = b.status === 'completed' ? '已完成' : b.status === 'in_progress' ? '进行中' : '待开始';
+                            const sClass = b.status === 'completed' ? 'bg-green-500/15 text-green-400 border border-green-500/20' : b.status === 'in_progress' ? 'bg-[#00ffd1]/15 text-[#00ffd1] border border-[#00ffd1]/20' : 'bg-white/5 text-white/50 border border-white/10';
+                            return (
+                              <Reorder.Item key={b.id} value={b}>
+                                <motion.div layout className="p-4 rounded-2xl bg-black/30 border border-white/10 group">
+                                  <div className="flex items-start justify-between gap-4">
+                                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                                      <GripVertical size={14} className="text-white/30 shrink-0" />
+                                      <div className="flex flex-col gap-2 flex-1 min-w-0">
+                                        <div className="text-white/90 font-extrabold truncate">{b.title}</div>
+                                        <div className="text-xs text-white/50 font-bold tracking-widest uppercase">
+                                          {b.planned_minutes || selectedRoadmap.default_block_minutes} MIN · 番茄 {selectedRoadmap.default_pomodoro_minutes}+{selectedRoadmap.default_break_minutes}
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      <div className="relative">
+                                        <button
+                                          onClick={(e) => { e.stopPropagation(); setMoveBlockId(moveBlockId === b.id ? null : b.id); }}
+                                          className="p-2 rounded-xl opacity-0 group-hover:opacity-100 bg-white/5 border border-white/10 text-white/40 hover:text-[#b998ff] hover:bg-[#b998ff]/10 hover:border-[#b998ff]/20 transition-all"
+                                          title="移动到阶段"
+                                        >
+                                          <ArrowRightLeft size={14} />
+                                        </button>
+                                        {moveBlockId === b.id && (
+                                          <div className="absolute right-0 top-full mt-2 w-48 bg-[#1a1a1a] border border-white/10 rounded-xl shadow-2xl z-[300] overflow-hidden" onClick={e => e.stopPropagation()}>
+                                            {sortedStages.map(s => (
+                                              <button
+                                                key={s.id}
+                                                onClick={() => handleMoveBlock(b.id, s.id)}
+                                                className="w-full text-left px-4 py-2.5 text-sm text-white/70 hover:text-white hover:bg-white/10 font-bold transition-colors"
+                                              >
+                                                {s.title}
+                                              </button>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                      <div className={`px-3 py-1 rounded-full text-xs font-black tracking-widest ${sClass}`}>
+                                        {sBadge}
+                                      </div>
+                                      <button
+                                        onClick={() => setSelectedNode(b)}
+                                        className="p-2 rounded-xl bg-white/5 border border-white/10 text-white/60 hover:text-white hover:bg-white/10"
+                                        title="编辑"
+                                      >
+                                        <Edit2 size={16} />
+                                      </button>
+                                    </div>
                                   </div>
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <div className={`px-3 py-1 rounded-full text-xs font-black tracking-widest ${b.status === 'completed' ? 'bg-green-500/15 text-green-400 border border-green-500/20' : b.status === 'in_progress' ? 'bg-[#00ffd1]/15 text-[#00ffd1] border border-[#00ffd1]/20' : 'bg-white/5 text-white/50 border border-white/10'}`}>
-                                  {b.status === 'completed' ? '已完成' : b.status === 'in_progress' ? '进行中' : '待开始'}
-                                </div>
-                                <button
-                                  onClick={() => setSelectedNode(b)}
-                                  className="p-2 rounded-xl bg-white/5 border border-white/10 text-white/60 hover:text-white hover:bg-white/10"
-                                  title="编辑"
-                                >
-                                  <Edit2 size={16} />
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+                                </motion.div>
+                              </Reorder.Item>
+                            );
+                          })}
+                        </Reorder.Group>
+                      )}
+                    </motion.div>
                   )}
                 </div>
               )}
@@ -1332,9 +1458,10 @@ ${exam.scope ? `【考试范围】${JSON.stringify(exam.scope)}` : ''}
       </AnimatePresence>
 
       {/* AI Fill Details Preview Modal */}
-      <AnimatePresence>
+      {createPortal(
+        <AnimatePresence>
         {aiDetailsPreview !== null && (
-          <div className="fixed inset-0 z-[270] flex items-center justify-center p-4 sm:p-6">
+          <div className="fixed inset-0 z-[350] flex items-center justify-center p-4 sm:p-6">
             <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setAiDetailsPreview(null)} />
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -1374,7 +1501,9 @@ ${exam.scope ? `【考试范围】${JSON.stringify(exam.scope)}` : ''}
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+      </AnimatePresence>,
+      document.body
+      )}
 
       {/* Create Roadmap Modal */}
       <AnimatePresence>
@@ -1701,9 +1830,10 @@ ${exam.scope ? `【考试范围】${JSON.stringify(exam.scope)}` : ''}
       document.body
       )}
 
-      <AnimatePresence>
+      {createPortal(
+        <AnimatePresence>
         {applyPreview && (
-          <div className="fixed inset-0 z-[260] flex items-center justify-center p-4 sm:p-6">
+          <div className="fixed inset-0 z-[350] flex items-center justify-center p-4 sm:p-6">
             <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setApplyPreview(null)} />
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -1752,7 +1882,9 @@ ${exam.scope ? `【考试范围】${JSON.stringify(exam.scope)}` : ''}
             </motion.div>
           </div>
         )}
-      </AnimatePresence>
+      </AnimatePresence>,
+      document.body
+      )}
 
       {/* Roadmap Exam Taking Modal */}
       <AnimatePresence>
@@ -2076,6 +2208,151 @@ ${exam.scope ? `【考试范围】${JSON.stringify(exam.scope)}` : ''}
           </div>
         )}
       </AnimatePresence>
+
+      {createPortal(
+        <AnimatePresence>
+        {confirmDeleteRoadmap && (
+          <div className="fixed inset-0 z-[350] flex items-center justify-center p-4 sm:p-6">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              onClick={() => setConfirmDeleteRoadmap(null)}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-md bg-[#0b0b0b] border border-white/10 rounded-[24px] shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 flex flex-col items-center gap-4">
+                <div className="w-14 h-14 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center">
+                  <Trash2 size={28} className="text-red-400" />
+                </div>
+                <div className="text-center space-y-2">
+                  <div className="text-lg font-extrabold text-white">确认删除这个 Roadmap？</div>
+                  <div className="text-sm text-white/50">其下所有阶段、Block 和考试数据都将被删除，此操作不可撤销。</div>
+                </div>
+                <div className="flex gap-3 w-full pt-2">
+                  <button
+                    onClick={() => setConfirmDeleteRoadmap(null)}
+                    className="flex-1 px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white/70 hover:bg-white/10 text-sm font-bold transition-all"
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={confirmDeleteRoadmapAction}
+                    className="flex-1 px-4 py-3 rounded-xl bg-red-500/90 text-white font-extrabold text-sm hover:bg-red-500 transition-all"
+                  >
+                    确认删除
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>,
+      document.body
+      )}
+
+      {createPortal(
+        <AnimatePresence>
+        {confirmDeleteAllRoadmaps && (
+          <div className="fixed inset-0 z-[350] flex items-center justify-center p-4 sm:p-6">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              onClick={() => setConfirmDeleteAllRoadmaps(false)}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-md bg-[#0b0b0b] border border-white/10 rounded-[24px] shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 flex flex-col items-center gap-4">
+                <div className="w-14 h-14 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center">
+                  <Trash2 size={28} className="text-red-400" />
+                </div>
+                <div className="text-center space-y-2">
+                  <div className="text-lg font-extrabold text-white">确认删除全部 Roadmap？</div>
+                  <div className="text-sm text-white/50">
+                    将删除全部 <span className="text-red-400 font-bold">{roadmaps.length}</span> 个 Roadmap，所有阶段、Block 和考试数据都将被永久删除，此操作不可撤销。
+                  </div>
+                </div>
+                <div className="flex gap-3 w-full pt-2">
+                  <button
+                    onClick={() => setConfirmDeleteAllRoadmaps(false)}
+                    className="flex-1 px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white/70 hover:bg-white/10 text-sm font-bold transition-all"
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={confirmDeleteAllRoadmapsAction}
+                    className="flex-1 px-4 py-3 rounded-xl bg-red-500/90 text-white font-extrabold text-sm hover:bg-red-500 transition-all"
+                  >
+                    确认删除
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>,
+      document.body
+      )}
+
+      {createPortal(
+        <AnimatePresence>
+        {confirmDeleteNode && (
+          <div className="fixed inset-0 z-[350] flex items-center justify-center p-4 sm:p-6">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              onClick={() => setConfirmDeleteNode(false)}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-md bg-[#0b0b0b] border border-white/10 rounded-[24px] shadow-2xl overflow-hidden"
+            >
+              <div className="p-6 flex flex-col items-center gap-4">
+                <div className="w-14 h-14 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center">
+                  <Trash2 size={28} className="text-red-400" />
+                </div>
+                <div className="text-center space-y-2">
+                  <div className="text-lg font-extrabold text-white">
+                    {selectedNode?.node_type === 'stage' ? '确认删除这个阶段？' : '确认删除这个 Block？'}
+                  </div>
+                  <div className="text-sm text-white/50">此操作不可撤销。</div>
+                </div>
+                <div className="flex gap-3 w-full pt-2">
+                  <button
+                    onClick={() => setConfirmDeleteNode(false)}
+                    className="flex-1 px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white/70 hover:bg-white/10 text-sm font-bold transition-all"
+                  >
+                    取消
+                  </button>
+                  <button
+                    onClick={confirmDeleteNodeAction}
+                    className="flex-1 px-4 py-3 rounded-xl bg-red-500/90 text-white font-extrabold text-sm hover:bg-red-500 transition-all"
+                  >
+                    确认删除
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>,
+      document.body
+      )}
     </>
   );
 };

@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion';
 import 'katex/dist/katex.min.css';
-import { AlertCircle, BookmarkPlus, BookOpen, CheckCircle2, Loader2, X, XCircle } from 'lucide-react';
+import { AlertCircle, BookmarkPlus, BookOpen, CheckCircle2, Loader2, Plus, X, XCircle } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
@@ -13,6 +13,8 @@ const QuizModal = ({ isOpen, onClose, topic, taskId, userId, availableSubjects =
   const [grading, setGrading] = useState(false);
   const [gradingSingle, setGradingSingle] = useState({});
   const [quizData, setQuizData] = useState(null);
+  const [quizCount, setQuizCount] = useState(3);
+  const [quizStep, setQuizStep] = useState('setup'); // setup | loading | ready
   const [userAnswers, setUserAnswers] = useState({});
   const [report, setReport] = useState(null);
   const [savingWrongBook, setSavingWrongBook] = useState({});
@@ -21,41 +23,47 @@ const QuizModal = ({ isOpen, onClose, topic, taskId, userId, availableSubjects =
   const [showSubjectSelect, setShowSubjectSelect] = useState(null);
   const [extraSubjects, setExtraSubjects] = useState([]);
   const similarIdRef = useRef(1);
+  const inputRef = useRef(null);
 
   const subjects = useMemo(() => {
     return [...new Set([...(availableSubjects || []), ...extraSubjects])];
   }, [availableSubjects, extraSubjects]);
 
-  const loadQuiz = async (currentTopic) => {
+  const loadQuiz = async (currentTopic, count = 3) => {
     setLoading(true);
+    setQuizStep('loading');
     try {
-      const data = await generateQuiz(currentTopic);
+      const data = await generateQuiz(currentTopic, count);
       setQuizData(data);
       setUserAnswers({});
       setReport(null);
+      setQuizStep('ready');
     } catch (error) {
       console.error("加载题目失败", error);
       alert("生成题目失败，请稍后重试");
+      setQuizStep('setup');
     } finally {
       setLoading(false);
     }
   };
 
+  const startQuiz = () => {
+    loadQuiz(topic, quizCount);
+  };
+
   useEffect(() => {
     if (isOpen && topic) {
-      const init = async () => {
-        setQuizData(null);
-        setUserAnswers({});
-        setReport(null);
-        setSavingWrongBook({});
-        setSelectedSubjectMap({});
-        setGeneratingSimilar({});
-        setShowSubjectSelect(null);
-        setGradingSingle({});
-        setExtraSubjects([]);
-        await loadQuiz(topic);
-      };
-      init();
+      setQuizData(null);
+      setUserAnswers({});
+      setReport(null);
+      setSavingWrongBook({});
+      setSelectedSubjectMap({});
+      setGeneratingSimilar({});
+      setShowSubjectSelect(null);
+      setGradingSingle({});
+      setExtraSubjects([]);
+      setQuizCount(3);
+      setQuizStep('setup');
     }
   }, [isOpen, topic]);
 
@@ -225,7 +233,32 @@ const QuizModal = ({ isOpen, onClose, topic, taskId, userId, availableSubjects =
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
-          {loading ? (
+          {quizStep === 'setup' ? (
+            <div className="flex flex-col items-center justify-center h-64 gap-6">
+              <div className="text-white/80 font-extrabold text-lg">准备答题</div>
+              <div className="flex items-center gap-3">
+                <span className="text-white/50 text-sm font-bold">我要做</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={quizCount}
+                  onChange={(e) => {
+                    const v = parseInt(e.target.value) || 1;
+                    setQuizCount(Math.min(20, Math.max(1, v)));
+                  }}
+                  className="w-20 px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white text-center font-extrabold text-xl outline-none focus:border-[#00ffd1]/50"
+                />
+                <span className="text-white/50 text-sm font-bold">道题</span>
+              </div>
+              <button
+                onClick={startQuiz}
+                className="px-8 py-3 rounded-xl bg-[#00ffd1] text-black font-extrabold text-sm hover:bg-[#00ffd1]/90 transition-colors"
+              >
+                开始答题
+              </button>
+            </div>
+          ) : loading ? (
             <div className="flex flex-col items-center justify-center h-64 gap-4">
               <Loader2 size={40} className="text-[#00ffd1] animate-spin" />
               <p className="text-white/60 font-medium">AI 老师正在为您生成专属练习题...</p>
@@ -420,22 +453,35 @@ const QuizModal = ({ isOpen, onClose, topic, taskId, userId, availableSubjects =
                                       ))}
                                     </div>
                                     <div className="mt-2 pt-2 border-t border-white/10">
-                                      <input 
-                                        type="text" 
-                                        placeholder="输入新科目并回车..." 
-                                        className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-[#00ffd1]/50"
-                                        onKeyDown={(e) => {
-                                          if (e.key === 'Enter' && e.target.value.trim()) {
-                                            const newSub = e.target.value.trim();
-                                            if (!subjects.includes(newSub)) {
-                                              setExtraSubjects(prev => [...prev, newSub]);
-                                            }
-                                            setSelectedSubjectMap(prev => ({ ...prev, [q.id]: newSub }));
-                                            addToWrongBook(q, qReport, newSub);
-                                            setShowSubjectSelect(null);
-                                          }
+                                      <button
+                                        onClick={() => {
+                                          inputRef?.current?.focus();
                                         }}
-                                      />
+                                        className="w-full text-left px-2 py-1.5 rounded-lg text-sm text-[#00ffd1]/70 hover:text-[#00ffd1] hover:bg-white/5 font-bold transition-colors flex items-center gap-1"
+                                      >
+                                        <Plus size={14} />
+                                        新增科目
+                                      </button>
+                                      <div className="flex items-center gap-1 mt-1">
+                                        <input
+                                          ref={inputRef}
+                                          type="text"
+                                          placeholder={subjects.length === 0 ? '输入科目名称并回车...' : '或输入新科目...'}
+                                          className="flex-1 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white outline-none focus:border-[#00ffd1]/50"
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter' && e.target.value.trim()) {
+                                              const newSub = e.target.value.trim();
+                                              if (!subjects.includes(newSub)) {
+                                                setExtraSubjects(prev => [...prev, newSub]);
+                                              }
+                                              setSelectedSubjectMap(prev => ({ ...prev, [q.id]: newSub }));
+                                              addToWrongBook(q, qReport, newSub);
+                                              setShowSubjectSelect(null);
+                                              e.target.value = '';
+                                            }
+                                          }}
+                                        />
+                                      </div>
                                     </div>
                                   </div>
                                 )}
